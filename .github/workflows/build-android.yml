@@ -53,15 +53,15 @@ jobs:
         if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
         run: |
           echo "Building Android release in Docker..."
-          docker run --rm -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            /bin/bash -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android release"
+          docker run --rm --entrypoint /bin/bash -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
+            -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android release"
 
       - name: Build Android (debug fallback when no keystore)
         if: ${{ env.ANDROID_KEYSTORE_B64 == '' }}
         run: |
           echo "No keystore provided — building Android debug APK (fallback)"
-          docker run --rm -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            /bin/bash -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android debug"
+          docker run --rm --entrypoint /bin/bash -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
+            -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android debug"
 
       - name: Upload APK/AAB artifact
         uses: actions/upload-artifact@v4
