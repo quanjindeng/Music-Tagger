@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            autoconf automake libtool \
+            autoconf automake libtool libtool-bin m4 \
             build-essential \
             pkg-config \
             git \
@@ -54,6 +54,15 @@ jobs:
             libfreetype6-dev \
             python3-dev \
             libpython3-dev
+
+      - name: Setup autotools macros
+        run: |
+          sudo apt-get install -y m4
+          # Ensure libtoolize is available and register m4 macros
+          which libtoolize || which glibtoolize
+          aclocal --version
+          autoconf --version
+          automake --version
 
       - name: Create and activate virtualenv
         run: |
@@ -91,6 +100,10 @@ jobs:
 
       - name: Run buildozer to build Android debug APK (non-interactive)
         working-directory: ${{ github.workspace }}
+        env:
+          # Bypass libtool version issues by using system libffi
+          LDFLAGS: "-L/usr/lib/x86_64-linux-gnu"
+          CPPFLAGS: "-I/usr/include"
         run: |
           source .venv/bin/activate
           # Ensure we run as non-root; pipe 'yes' as fallback for any prompts
