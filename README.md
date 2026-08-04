@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 
 一个轻量级、智能化的命令行音乐元数据（ID3 / Vorbis Tags）批量整理工具。支持根据文件名自动提取元数据、联网匹配下载高清专辑封面与 LRC 歌词、擦除旧有乱码标签，以及规范化批量重命名文件。
-使用 Gemini 3.1Pro 辅助生成，可能存在Bug。
+使用AI工具辅助生成，可能存在Bug。
 
 ---
 
