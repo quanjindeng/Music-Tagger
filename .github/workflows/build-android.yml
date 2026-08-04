@@ -1,0 +1,45 @@
+name: Build Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore Android keystore (if provided)
+        if: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+        run: |
+          echo "Decoding Android keystore"
+          echo ${{ secrets.ANDROID_KEYSTORE_B64 }} | base64 --decode > release.keystore
+          # write alias/password into environment file for later substitution
+          echo "RELEASE_KEYSTORE=release.keystore" >> $GITHUB_ENV
+          echo "RELEASE_KEYALIAS=${{ secrets.ANDROID_KEYALIAS }}" >> $GITHUB_ENV
+          echo "RELEASE_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "RELEASE_KEYPASS=${{ secrets.ANDROID_KEYPASS }}" >> $GITHUB_ENV
+
+      - name: Inject keystore into buildozer.spec (if keystore present)
+        if: env.RELEASE_KEYSTORE != ''
+        run: |
+          echo "Patching buildozer.spec with keystore settings"
+          sed -i "/^# android.release_keystore/ c\android.release_keystore = release.keystore" buildozer.spec || true
+          sed -i "/^# android.release_keyalias/ c\android.release_keyalias = ${RELEASE_KEYALIAS}" buildozer.spec || true
+          sed -i "/^# android.release_keypass/ c\android.release_keypass = ${RELEASE_KEYPASS}" buildozer.spec || true
+          sed -i "/^# android.release_keystore_password/ c\android.release_keystore_password = ${RELEASE_KEYSTORE_PASSWORD}" buildozer.spec || true
+
+      - name: Build with Buildozer (Docker)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
+            /bin/bash -lc "pip install -r requirements.txt || true; buildozer -v android release" 
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: music-tagger-android
+          path: bin/*.apk
