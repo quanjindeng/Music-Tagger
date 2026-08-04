@@ -1,33 +1,55 @@
 name: Build Windows EXE
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    # Map secrets into env so we don't reference `secrets` directly in if-expressions
+    env:
+      WINDOWS_PFX_B64: ${{ secrets.WINDOWS_PFX_B64 }}
+      WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Show environment
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pyinstaller
+          python -V
+          pip -V
+          python -m pip install --upgrade pip setuptools wheel
+          pip -V
 
-      - name: Build with PyInstaller
+      - name: Install dependencies (including Kivy wheels)
+        shell: bash
         run: |
-          pyinstaller --onefile --windowed main_gui.py
-          dir dist
+          set -e
+          echo "Installing requirements (will print verbose output)..."
+          if [ -f requirements.txt ]; then
+            python -m pip install --upgrade pip
+            python -m pip install "kivy==2.2.1" --extra-index-url https://kivy.org/downloads/simple/ || true
+            pip install -r requirements.txt || (echo "pip install -r requirements failed" && pip freeze && exit 1)
+          else
+            echo "No requirements.txt found"
+          fi
+
+      - name: List installed packages
+        run: |
+          pip freeze
+
+      - name: Build with PyInstaller (verbose)
+        run: |
+          pyinstaller --clean --onefile --windowed main_gui.py || (echo "PyInstaller failed" && exit 1)
 
       - name: Upload unsigned EXE artifact
         uses: actions/upload-artifact@v4
@@ -35,50 +57,44 @@ jobs:
           name: music-tagger-windows-unsigned
           path: dist/*.exe
 
-      - name: Decode Windows PFX (if provided)
-        if: ${{ secrets.WINDOWS_PFX_B64 }}
+      - name: Decode PFX (if provided)
+        if: ${{ env.WINDOWS_PFX_B64 != '' }}
         shell: pwsh
         run: |
-          Write-Host "Decoding PFX to release.pfx"
-          $pfx_b64 = "${{ secrets.WINDOWS_PFX_B64 }}"
-          [IO.File]::WriteAllBytes('release.pfx', [Convert]::FromBase64String($pfx_b64))
-          Write-Host "PFX written."
+          Write-Host "Decoding PFX into release.pfx"
+          $b64 = "${{ env.WINDOWS_PFX_B64 }}"
+          [IO.File]::WriteAllBytes('release.pfx', [Convert]::FromBase64String($b64))
+          Write-Host "PFX decoded."
 
       - name: Sign EXE(s) (if PFX provided)
-        if: ${{ secrets.WINDOWS_PFX_B64 }}
+        if: ${{ env.WINDOWS_PFX_B64 != '' }}
         shell: pwsh
         env:
-          PFX_PASS: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          PFX_PASS: ${{ env.WINDOWS_PFX_PASSWORD }}
         run: |
           Write-Host "Signing EXE(s) in dist\ ..."
           $pfx = Resolve-Path release.pfx
           $password = $env:PFX_PASS
-
           $exeFiles = Get-ChildItem -Path dist -Filter *.exe -File -ErrorAction SilentlyContinue
           if (-not $exeFiles) {
-            Write-Host "No EXE files found in dist/. Nothing to sign."
+            Write-Host "No EXE files found to sign."
             exit 0
           }
-
-          # Try to use signtool if available (Windows SDK). Otherwise fallback to osslsigncode installed via choco.
           $signtool = Get-Command signtool -ErrorAction SilentlyContinue
           foreach ($f in $exeFiles) {
-            $filePath = $f.FullName
+            $file = $f.FullName
             if ($signtool) {
-              Write-Host "Signing $filePath with signtool"
-              signtool sign /f "$($pfx)" /p $password /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$filePath"
+              signtool sign /f "$($pfx)" /p $password /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$file"
             } else {
-              Write-Host "signtool not found; installing osslsigncode (may take a while)"
               choco install -y osslsigncode
-              # osslsigncode will create a new file; replace the original afterwards
-              $out = "$filePath.signed.exe"
-              osslsigncode sign -pkcs12 "$($pfx)" -pass $password -n "MusicTagger" -t http://timestamp.digicert.com -in "$filePath" -out "$out"
-              if (Test-Path $out) { Move-Item -Force $out $filePath }
+              $out = "$file.signed.exe"
+              osslsigncode sign -pkcs12 "$($pfx)" -pass $password -n "MusicTagger" -t http://timestamp.digicert.com -in "$file" -out "$out"
+              if (Test-Path $out) { Move-Item -Force $out $file }
             }
           }
 
-      - name: Upload signed EXE artifact (if PFX provided)
-        if: ${{ secrets.WINDOWS_PFX_B64 }}
+      - name: Upload signed EXE artifact (if signed)
+        if: ${{ env.WINDOWS_PFX_B64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: music-tagger-windows-signed
