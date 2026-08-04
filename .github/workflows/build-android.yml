@@ -1,51 +1,67 @@
 name: Build Android APK
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    # Map secrets into env so we don't reference `secrets` directly in if-expressions
+    env:
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_KEYALIAS: ${{ secrets.ANDROID_KEYALIAS }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEYPASS: ${{ secrets.ANDROID_KEYPASS }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show repo files
+        run: |
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la
+          pwd
+          echo "buildozer.spec content:"
+          sed -n '1,200p' buildozer.spec || true
+
       - name: Decode Android keystore (if provided)
-        if: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
         run: |
           echo "Decoding Android keystore to release.keystore"
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > release.keystore
+          echo "${{ env.ANDROID_KEYSTORE_B64 }}" | base64 --decode > release.keystore
           echo "RELEASE_KEYSTORE=release.keystore" >> $GITHUB_ENV
-          echo "RELEASE_KEYALIAS=${{ secrets.ANDROID_KEYALIAS }}" >> $GITHUB_ENV
-          echo "RELEASE_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-          echo "RELEASE_KEYPASS=${{ secrets.ANDROID_KEYPASS }}" >> $GITHUB_ENV
+          echo "RELEASE_KEYALIAS=${{ env.ANDROID_KEYALIAS }}" >> $GITHUB_ENV
+          echo "RELEASE_KEYSTORE_PASSWORD=${{ env.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "RELEASE_KEYPASS=${{ env.ANDROID_KEYPASS }}" >> $GITHUB_ENV
+          ls -la
 
       - name: Inject keystore into buildozer.spec (if keystore provided)
-        if: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
         run: |
-          echo "Patching buildozer.spec to reference release.keystore and provided passwords"
+          echo "Patching buildozer.spec with keystore settings"
           sed -i "/^# android.release_keystore/ c\android.release_keystore = release.keystore" buildozer.spec || true
           sed -i "/^# android.release_keyalias/ c\android.release_keyalias = ${RELEASE_KEYALIAS}" buildozer.spec || true
           sed -i "/^# android.release_keypass/ c\android.release_keypass = ${RELEASE_KEYPASS}" buildozer.spec || true
           sed -i "/^# android.release_keystore_password/ c\android.release_keystore_password = ${RELEASE_KEYSTORE_PASSWORD}" buildozer.spec || true
-          cat buildozer.spec
+          sed -n '1,200p' buildozer.spec
 
       - name: Build Android (release if keystore provided)
-        if: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
         run: |
-          echo "Building Android release via buildozer (Docker)"
+          echo "Building Android release in Docker..."
           docker run --rm -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            /bin/bash -lc "pip install -r requirements.txt || true; buildozer -v android release"
+            /bin/bash -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android release"
 
       - name: Build Android (debug fallback when no keystore)
-        if: ${{ !secrets.ANDROID_KEYSTORE_B64 }}
+        if: ${{ env.ANDROID_KEYSTORE_B64 == '' }}
         run: |
           echo "No keystore provided — building Android debug APK (fallback)"
           docker run --rm -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            /bin/bash -lc "pip install -r requirements.txt || true; buildozer -v android debug"
+            /bin/bash -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android debug"
 
       - name: Upload APK/AAB artifact
         uses: actions/upload-artifact@v4
