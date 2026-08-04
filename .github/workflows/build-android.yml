@@ -11,9 +11,7 @@ jobs:
   build-android:
     runs-on: ubuntu-latest
     env:
-      # 确保 pip 使用缓存目录
       PIP_NO_CACHE_DIR: "false"
-      # 非交互标志（备份，仍然使用 yes 管道以防 buildozer 提示）
       CI: "true"
 
     steps:
@@ -37,7 +35,6 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             pkg-config \
-            python3.11-dev \
             git \
             unzip \
             wget \
@@ -53,12 +50,13 @@ jobs:
             libgles2-mesa-dev \
             libsdl2-dev \
             libjpeg-dev \
-            libfreetype6-dev
+            libfreetype6-dev \
+            python3-dev \
+            libpython3-dev
 
       - name: Create and activate virtualenv
         run: |
           python -m venv .venv
-          # activate in bash steps
           source .venv/bin/activate
           python -m pip install --upgrade pip
 
@@ -69,13 +67,6 @@ jobs:
           pip install cython
           pip install --upgrade buildozer
 
-      - name: Install project Python requirements (if any)
-        run: |
-          source .venv/bin/activate
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -84,9 +75,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Install project Python requirements (if any)
+        run: |
+          source .venv/bin/activate
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
       - name: Prepare Buildozer configuration (optional)
         run: |
-          # Ensure buildozer.spec exists or adjust as needed.
           if [ ! -f buildozer.spec ]; then
             echo "WARNING: buildozer.spec not found in repo root. Make sure you have it configured."
           fi
@@ -95,9 +92,5 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           source .venv/bin/activate
-          # Ensure we run as non-root (runner already non-root). If any prior step used sudo creating root artifacts,
-          # avoid running buildozer with sudo. Pipe 'yes' to auto-confirm any prompts as fallback.
+          # Ensure we run as non-root; pipe 'yes' as fallback for any prompts
           yes y | buildozer -v android debug
-        env:
-          # Ensure no accidental elevation; keep these unset or set to non-root
-          HOME: ${{ runner.temp }}
