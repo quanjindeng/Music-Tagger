@@ -1,3 +1,2 @@
-kivy==2.2.1
 mutagen>=1.45
 requests>=2.20
