@@ -1,72 +1,103 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    # Map secrets into env so we don't reference `secrets` directly in if-expressions
     env:
-      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-      ANDROID_KEYALIAS: ${{ secrets.ANDROID_KEYALIAS }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEYPASS: ${{ secrets.ANDROID_KEYPASS }}
+      # 确保 pip 使用缓存目录
+      PIP_NO_CACHE_DIR: "false"
+      # 非交互标志（备份，仍然使用 yes 管道以防 buildozer 提示）
+      CI: "true"
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show repo files
-        run: |
-          echo "Workspace: $GITHUB_WORKSPACE"
-          ls -la
-          pwd
-          echo "buildozer.spec content:"
-          sed -n '1,200p' buildozer.spec || true
-
-      - name: Decode Android keystore (if provided)
-        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
-        run: |
-          echo "Decoding Android keystore to release.keystore"
-          echo "${{ env.ANDROID_KEYSTORE_B64 }}" | base64 --decode > release.keystore
-          echo "RELEASE_KEYSTORE=release.keystore" >> $GITHUB_ENV
-          echo "RELEASE_KEYALIAS=${{ env.ANDROID_KEYALIAS }}" >> $GITHUB_ENV
-          echo "RELEASE_KEYSTORE_PASSWORD=${{ env.ANDROID_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-          echo "RELEASE_KEYPASS=${{ env.ANDROID_KEYPASS }}" >> $GITHUB_ENV
-          ls -la
-
-      - name: Inject keystore into buildozer.spec (if keystore provided)
-        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
-        run: |
-          echo "Patching buildozer.spec with keystore settings"
-          sed -i "/^# android.release_keystore/ c\android.release_keystore = release.keystore" buildozer.spec || true
-          sed -i "/^# android.release_keyalias/ c\android.release_keyalias = ${RELEASE_KEYALIAS}" buildozer.spec || true
-          sed -i "/^# android.release_keypass/ c\android.release_keypass = ${RELEASE_KEYPASS}" buildozer.spec || true
-          sed -i "/^# android.release_keystore_password/ c\android.release_keystore_password = ${RELEASE_KEYSTORE_PASSWORD}" buildozer.spec || true
-          sed -n '1,200p' buildozer.spec
-
-      - name: Build Android (release if keystore provided)
-        if: ${{ env.ANDROID_KEYSTORE_B64 != '' }}
-        run: |
-          echo "Building Android release in Docker..."
-          docker run --rm --entrypoint /bin/bash -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android release"
-
-      - name: Build Android (debug fallback when no keystore)
-        if: ${{ env.ANDROID_KEYSTORE_B64 == '' }}
-        run: |
-          echo "No keystore provided — building Android debug APK (fallback)"
-          docker run --rm --entrypoint /bin/bash -v "${{ github.workspace }}":/home/user/hostcwd -w /home/user/hostcwd kivy/buildozer:latest \
-            -lc "set -ex; pip install -r requirements.txt || true; buildozer -v android debug"
-
-      - name: Upload APK/AAB artifact
-        uses: actions/upload-artifact@v4
+      - name: Set up Java (required by Android SDK / build tools)
+        uses: actions/setup-java@v4
         with:
-          name: music-tagger-android
-          path: |
-            bin/*.apk
-            bin/*.aab
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system packages required for building Kivy / Android
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            python3.11-dev \
+            git \
+            unzip \
+            wget \
+            zlib1g-dev \
+            libssl-dev \
+            libffi-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev \
+            libpango1.0-dev \
+            libglib2.0-dev \
+            libmtdev-dev \
+            libgl1-mesa-dev \
+            libgles2-mesa-dev \
+            libsdl2-dev \
+            libjpeg-dev \
+            libfreetype6-dev
+
+      - name: Create and activate virtualenv
+        run: |
+          python -m venv .venv
+          # activate in bash steps
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+
+      - name: Install Python build tools and Buildozer (in venv)
+        run: |
+          source .venv/bin/activate
+          pip install --upgrade pip setuptools wheel
+          pip install cython
+          pip install --upgrade buildozer
+
+      - name: Install project Python requirements (if any)
+        run: |
+          source .venv/bin/activate
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Prepare Buildozer configuration (optional)
+        run: |
+          # Ensure buildozer.spec exists or adjust as needed.
+          if [ ! -f buildozer.spec ]; then
+            echo "WARNING: buildozer.spec not found in repo root. Make sure you have it configured."
+          fi
+
+      - name: Run buildozer to build Android debug APK (non-interactive)
+        working-directory: ${{ github.workspace }}
+        run: |
+          source .venv/bin/activate
+          # Ensure we run as non-root (runner already non-root). If any prior step used sudo creating root artifacts,
+          # avoid running buildozer with sudo. Pipe 'yes' to auto-confirm any prompts as fallback.
+          yes y | buildozer -v android debug
+        env:
+          # Ensure no accidental elevation; keep these unset or set to non-root
+          HOME: ${{ runner.temp }}
