@@ -55,12 +55,12 @@ jobs:
             python3-dev \
             libpython3-dev
 
-      - name: Initialize autotools and rebuild aclocal database
+      - name: Verify autotools installation
         run: |
-          # Rebuild aclocal macro database to ensure libtool macros are available
-          aclocal --force --verbose --install
-          # Verify libtoolize and macros are properly set up
+          which libtoolize
           libtoolize --version
+          autoconf --version
+          automake --version
           aclocal --version
 
       - name: Create and activate virtualenv
@@ -86,7 +86,7 @@ jobs:
 
       - name: Install project Python requirements (if any)
         run: |
-          source .venv/bin/activate
+          source .venv/activate
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
@@ -100,10 +100,11 @@ jobs:
       - name: Run buildozer to build Android debug APK (non-interactive)
         working-directory: ${{ github.workspace }}
         env:
-          # Set proper paths for autotools
           LDFLAGS: "-L/usr/lib/x86_64-linux-gnu"
           CPPFLAGS: "-I/usr/include"
-          ACLOCAL_PATH: "/usr/share/aclocal:/usr/local/share/aclocal"
+          ACLOCAL_PATH: "/usr/share/aclocal"
+          M4: "/usr/bin/m4"
+          LIBTOOLIZE: "/usr/bin/libtoolize"
         run: |
           source .venv/bin/activate
           # Ensure we run as non-root; pipe 'yes' as fallback for any prompts
