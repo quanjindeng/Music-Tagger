@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
       - name: Build with PyInstaller
@@ -29,40 +29,59 @@ jobs:
           pyinstaller --onefile --windowed main_gui.py
           dir dist
 
-      - name: Prepare Windows signing (if secret provided)
-        if: ${{ secrets.WINDOWS_PFX_B64 != '' }}
+      - name: Upload unsigned EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: music-tagger-windows-unsigned
+          path: dist/*.exe
+
+      - name: Decode Windows PFX (if provided)
+        if: ${{ secrets.WINDOWS_PFX_B64 }}
         shell: pwsh
         run: |
-          Write-Host "Decoding PFX..."
+          Write-Host "Decoding PFX to release.pfx"
           $pfx_b64 = "${{ secrets.WINDOWS_PFX_B64 }}"
           [IO.File]::WriteAllBytes('release.pfx', [Convert]::FromBase64String($pfx_b64))
+          Write-Host "PFX written."
 
-      - name: Sign EXE(s) (if PFX available)
-        if: ${{ secrets.WINDOWS_PFX_B64 != '' }}
+      - name: Sign EXE(s) (if PFX provided)
+        if: ${{ secrets.WINDOWS_PFX_B64 }}
         shell: pwsh
+        env:
+          PFX_PASS: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
-          Write-Host "Signing all EXE files in dist\\"
+          Write-Host "Signing EXE(s) in dist\ ..."
           $pfx = Resolve-Path release.pfx
-          $password = "${{ secrets.WINDOWS_PFX_PASSWORD }}"
-          Get-ChildItem -Path dist -Filter *.exe | ForEach-Object {
-            $in = $_.FullName
-            $out = $_.FullName -replace '\\' , '\\'
-            Write-Host "Signing $in"
-            # Try signtool if present
-            if (Get-Command signtool -ErrorAction SilentlyContinue) {
-              signtool sign /f "$($pfx)" /p $password /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$in"
+          $password = $env:PFX_PASS
+
+          $exeFiles = Get-ChildItem -Path dist -Filter *.exe -File -ErrorAction SilentlyContinue
+          if (-not $exeFiles) {
+            Write-Host "No EXE files found in dist/. Nothing to sign."
+            exit 0
+          }
+
+          # Try to use signtool if available (Windows SDK). Otherwise fallback to osslsigncode installed via choco.
+          $signtool = Get-Command signtool -ErrorAction SilentlyContinue
+          foreach ($f in $exeFiles) {
+            $filePath = $f.FullName
+            if ($signtool) {
+              Write-Host "Signing $filePath with signtool"
+              signtool sign /f "$($pfx)" /p $password /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$filePath"
             } else {
-              Write-Host "signtool not found; attempting to use osslsigncode"
+              Write-Host "signtool not found; installing osslsigncode (may take a while)"
               choco install -y osslsigncode
-              & osslsigncode sign -pkcs12 "$($pfx)" -pass $password -n "MusicTagger" -in "$in" -out "$in.signed.exe"
-              Move-Item -Force "$in.signed.exe" "$in"
+              # osslsigncode will create a new file; replace the original afterwards
+              $out = "$filePath.signed.exe"
+              osslsigncode sign -pkcs12 "$($pfx)" -pass $password -n "MusicTagger" -t http://timestamp.digicert.com -in "$filePath" -out "$out"
+              if (Test-Path $out) { Move-Item -Force $out $filePath }
             }
           }
 
-      - name: Upload artifact
+      - name: Upload signed EXE artifact (if PFX provided)
+        if: ${{ secrets.WINDOWS_PFX_B64 }}
         uses: actions/upload-artifact@v4
         with:
-          name: music-tagger-windows
+          name: music-tagger-windows-signed
           path: dist/*.exe
 
       - name: Create GitHub Release (when triggered by tag)
